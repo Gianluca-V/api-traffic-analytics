@@ -1,0 +1,19 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'traffic-ingestor'
+    static_configs:
+      - targets: ['traffic-ingestor:8080']
+
+  - job_name: 'analytics-processor'
+    static_configs:
+      - targets: ['analytics-processor:8080']
+
+  - job_name: 'alerting-service'
+    static_configs:
+      - targets: ['alerting-service:8080']
+
+  - job_name: 'api-gateway'
+    static_configs:
+      - targets: ['api-gateway:8080']

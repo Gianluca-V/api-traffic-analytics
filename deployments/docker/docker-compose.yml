@@ -1,0 +1,154 @@
+version: '3.8'
+
+services:
+  # Base de datos
+  postgres:
+    image: postgres:15
+    container_name: traffic-postgres
+    env_file:
+      - ../../configs/dev.env
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - traffic-network
+    command: >
+      bash -c "
+        docker-entrypoint.sh postgres &
+        sleep 10 &&
+        psql -U $$DB_USER -d $$DB_NAME -c 'CREATE EXTENSION IF NOT EXISTS "uuid-ossp";' &&
+        echo 'Waiting for PostgreSQL...' &&
+        until pg_isready -U $$DB_USER -d $$DB_NAME -h localhost -p 5432;
+          sleep 2
+        done &&
+        echo 'PostgreSQL is ready. Creating tables...' &&
+        psql -U $$DB_USER -d $$DB_NAME -f /docker-entrypoint-initdb.d/create_tables.sql &&
+        echo 'Tables created succesfully' &&
+        wait
+      "
+
+  # Redis
+  redis:
+    image: redis:7-alpine
+    container_name: traffic-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - traffic-network
+
+  # Kafka
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    container_name: traffic-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - traffic-network
+
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    container_name: traffic-kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    networks:
+      - traffic-network
+
+  # Prometheus
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: traffic-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    networks:
+      - traffic-network
+
+  # Grafana
+  grafana:
+    image: grafana/grafana-enterprise
+    container_name: traffic-grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    networks:
+      - traffic-network
+
+  # Microservicios
+  traffic-ingestor:
+    build:
+      context: ../..
+      dockerfile: deployments/docker/Dockerfile.traffic-ingestor
+    container_name: traffic-ingestor
+    env_file:
+      - ../../configs/dev.env
+    ports:
+      - "8081:8080"
+    depends_on:
+      - kafka
+      - redis
+      - postgres
+    networks:
+      - traffic-network
+
+  analytics-processor:
+    build:
+      context: ../..
+      dockerfile: deployments/docker/Dockerfile.analytics-processor
+    container_name: analytics-processor
+    env_file:
+      - ../../configs/dev.env
+    ports:
+      - "8082:8080"
+    depends_on:
+      - kafka
+      - postgres
+    networks:
+      - traffic-network
+
+  alerting-service:
+    build:
+      context: ../..
+      dockerfile: deployments/docker/Dockerfile.alerting-service
+    container_name: alerting-service
+    env_file:
+      - ../../configs/dev.env
+    ports:
+      - "8083:8080"
+    depends_on:
+      - kafka
+      - postgres
+    networks:
+      - traffic-network
+
+  api-gateway:
+    build:
+      context: ../..
+      dockerfile: deployments/docker/Dockerfile.api-gateway
+    container_name: api-gateway
+    env_file:
+      - ../../configs/dev.env
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - traffic-network
+
+volumes:
+  postgres_data:
+
+networks:
+  traffic-network:
+    driver: bridge
